@@ -1,21 +1,23 @@
 """Export trajectories.
 
-    python -m datasea.export [--out_dir datasea/runs/exports] [--include_pilot]
+    python -m datasea.export [--out_dir datasea/runs/exports]
 
 Writes:
-    sft_passed.jsonl          tool-calling SFT records (verifier-passed sessions only)
-    raw_<status>.jsonl        full raw session + steps, one file per status (nothing dropped)
+    raw_all.jsonl           every session (all modes, all statuses) with its raw steps; nothing dropped
+    clean_passed.jsonl      production first attempts that passed the verifier with zero failed tool calls
+    recovery_passed.jsonl   production trajectories that passed but contain failed tool calls, and passed
+                            correction attempts (parent's failed trajectory + correction steps, one record)
+    failed.jsonl            production attempts that failed, were flagged unclear, or errored
 
-Pilot-only sessions are excluded from the SFT file unless --include_pilot is set;
-they always appear in the raw files with pilot_only=true.
+The three curated files contain production sessions only; onboarding and engineering sessions appear only
+in raw_all.jsonl. Records from public benchmark tasks keep pilot_only=true in metadata.
 """
 
 import argparse
 import json
 import os
-from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import RUNTIME_DIR
 from .store import PASSED, Store
@@ -32,29 +34,25 @@ def _tool_message_content(step: Dict[str, Any]) -> str:
     return json.dumps({"error": step.get("error") or res.get("error") or "unknown error"})
 
 
-def _duration_seconds(session: Dict[str, Any]) -> float:
+def _duration_seconds(session: Dict[str, Any]) -> Optional[float]:
     if not session.get("ended_at"):
         return None
     return (datetime.fromisoformat(session["ended_at"]) - datetime.fromisoformat(session["started_at"])).total_seconds()
 
 
-def to_sft_record(session: Dict[str, Any], steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+def to_record(session: Dict[str, Any], steps: List[Dict[str, Any]],
+              parent: Optional[Dict[str, Any]] = None, parent_steps: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Tool-calling message format. For a correction, the parent's steps come first."""
+    all_steps = (parent_steps or []) + steps
     messages = [
         {"role": "system", "content": session["system_prompt"]},
         {"role": "user", "content": session["user_prompt"]},
     ]
-    for s in steps:
-        call_id = f"call_{s['step']}"
-        messages.append(
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": call_id, "type": "function",
-                     "function": {"name": s["tool_name"], "arguments": json.dumps(s["arguments"])}}
-                ],
-            }
-        )
+    for i, s in enumerate(all_steps, 1):
+        call_id = f"call_{i}"
+        messages.append({"role": "assistant", "content": None, "tool_calls": [
+            {"id": call_id, "type": "function",
+             "function": {"name": s["tool_name"], "arguments": json.dumps(s["arguments"])}}]})
         messages.append({"role": "tool", "tool_call_id": call_id, "name": s["tool_name"], "content": _tool_message_content(s)})
     messages.append({"role": "assistant", "content": (session.get("final_response") or "").strip() or DEFAULT_FINAL})
 
@@ -71,12 +69,20 @@ def to_sft_record(session: Dict[str, Any], steps: List[Dict[str, Any]]) -> Dict[
             "task_id": session["task_id"],
             "worker_id": session["worker_id"],
             "domain": session["domain"],
+            "mode": session["mode"],
+            "attempt_kind": session["attempt_kind"],
+            "parent_session_id": session.get("parent_session_id"),
+            "parent_status": parent["status"] if parent else None,
+            "parent_final_response": parent.get("final_response") if parent else None,
+            "num_parent_steps": len(parent_steps or []),
+            "status": session["status"],
             "pilot_only": bool(session["pilot_only"]),
             "verifier_pass": bool(session.get("verifier_pass")),
             "verification_summary": verifier.get("verification_summary"),
+            "worker_note": session.get("worker_note"),
             "duration_seconds": _duration_seconds(session),
-            "num_tool_calls": len(steps),
-            "num_tool_errors": sum(1 for s in steps if s.get("error")),
+            "num_tool_calls": len(all_steps),
+            "num_tool_errors": sum(1 for s in all_steps if s.get("error")),
             "started_at": session["started_at"],
             "ended_at": session["ended_at"],
             "provenance": session["provenance"],
@@ -85,37 +91,46 @@ def to_sft_record(session: Dict[str, Any], steps: List[Dict[str, Any]]) -> Dict[
     }
 
 
-def export(out_dir: str, include_pilot: bool = False) -> Dict[str, int]:
+def classify(session: Dict[str, Any], num_errors: int) -> Optional[str]:
+    """Curated bucket for a finished session, or None if it only belongs in raw_all."""
+    if session["mode"] != "production" or session["status"] == "in_progress":
+        return None
+    if session["status"] != PASSED:
+        return "failed"
+    if session["attempt_kind"] == "correction" or num_errors:
+        return "recovery_passed"
+    return "clean_passed"
+
+
+def export(out_dir: str) -> Dict[str, int]:
     store = Store()
     os.makedirs(out_dir, exist_ok=True)
-    raw_by_status = defaultdict(list)
-    sft = []
-    for row in store.list_sessions():
+    buckets: Dict[str, list] = {"raw_all": [], "clean_passed": [], "recovery_passed": [], "failed": []}
+    for row in reversed(store.list_sessions()):
         session = store.get_session(row["session_id"])
         steps = store.get_steps(row["session_id"])
-        raw_by_status[session["status"]].append({"session": session, "steps": steps})
-        if session["status"] == PASSED and (include_pilot or not session["pilot_only"]):
-            sft.append(to_sft_record(session, steps))
+        buckets["raw_all"].append({"session": session, "steps": steps})
+        parent = parent_steps = None
+        if session.get("parent_session_id"):
+            parent = store.get_session(session["parent_session_id"])
+            parent_steps = store.get_steps(session["parent_session_id"])
+        rec = to_record(session, steps, parent, parent_steps)
+        bucket = classify(session, rec["metadata"]["num_tool_errors"])
+        if bucket:
+            buckets[bucket].append(rec)
 
-    counts = {}
-    with open(os.path.join(out_dir, "sft_passed.jsonl"), "w") as f:
-        for r in sft:
-            f.write(json.dumps(r) + "\n")
-    counts["sft_passed"] = len(sft)
-    for status, items in raw_by_status.items():
-        with open(os.path.join(out_dir, f"raw_{status}.jsonl"), "w") as f:
+    for name, items in buckets.items():
+        with open(os.path.join(out_dir, f"{name}.jsonl"), "w") as f:
             for r in items:
                 f.write(json.dumps(r) + "\n")
-        counts[f"raw_{status}"] = len(items)
-    return counts
+    return {k: len(v) for k, v in buckets.items()}
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--out_dir", default=os.path.join(RUNTIME_DIR, "exports"))
-    p.add_argument("--include_pilot", action="store_true", help="Include pilot_only (public benchmark) tasks in the SFT file")
     args = p.parse_args()
-    for k, v in export(args.out_dir, args.include_pilot).items():
+    for k, v in export(args.out_dir).items():
         print(f"{k}: {v}")
     print(f"written to {args.out_dir}")
 

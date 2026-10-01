@@ -10,13 +10,12 @@
 
 <section id="login" class="card narrow">
   <h2>Sign in</h2>
-  <p class="muted">Enter the worker ID you were given.</p>
-  <input id="worker-id" type="text" placeholder="e.g. worker_alice" />
-  <button id="login-btn">Continue</button>
+  <p class="muted" id="login-msg">Open the personal link you were given to sign in.</p>
 </section>
 
 <section id="picker" class="card narrow hidden">
   <h2>Choose a task</h2>
+  <p class="muted" id="mode-help"></p>
   <div id="task-list"></div>
 </section>
 
@@ -64,8 +63,9 @@
 </main>
 
 <section id="done" class="card narrow hidden">
-  <h2>Thanks — your work was recorded.</h2>
-  <button id="next-btn">Pick another task</button>
+  <h2 id="done-title">Thanks — your work was recorded.</h2>
+  <div id="done-body"></div>
+  <div class="row" id="done-actions"></div>
 </section>
 
 <script src="/static/schema_form.js"></script>
@@ -73,11 +73,17 @@
 const { h, humanize, buildForm } = { ...SchemaForm, buildForm: SchemaForm.buildForm };
 const $ = (id) => document.getElementById(id);
 const show = (id) => ["login", "picker", "workspace", "done"].forEach((x) => $(x).classList.toggle("hidden", x !== id));
-let state = { worker: localStorage.getItem("datasea_worker") || "", session: null, tools: [], busy: false };
+const linkMatch = location.pathname.match(/^\/w\/([^/]+)$/);
+if (linkMatch) {
+  localStorage.setItem("datasea_token", linkMatch[1]);
+  history.replaceState(null, "", "/");  // keep the secret out of the address bar
+}
+let state = { token: localStorage.getItem("datasea_token") || "", mode: "", session: null, tools: [], busy: false };
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}` } });
   const body = await r.json().catch(() => ({}));
+  if (r.status === 401) { localStorage.removeItem("datasea_token"); $("login-msg").textContent = "Your link is invalid or was replaced. Ask the DataSea team for a new one."; show("login"); }
   if (!r.ok) throw new Error(body.detail || r.statusText);
   return body;
 }
@@ -87,30 +93,53 @@ function pretty(text) {
   try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
 }
 
+const MODE_HELP = {
+  onboarding: "Practice mode: after you submit you'll see whether the checks passed, and you can try again from a fresh start.",
+  production: "Each task can be submitted once, and your first submission is recorded as is. If the checks fail, you may optionally make one follow-up fix.",
+};
+
 async function loadTasks() {
-  $("who").textContent = `— ${state.worker}`;
-  const tasks = await api("/api/tasks");
-  $("task-list").replaceChildren(...tasks.map((t) =>
-    h("div", { class: "task-item" },
-      h("div", {}, h("span", { class: "tag" }, t.domain), " ", t.preview, "…"),
-      h("button", { onclick: () => startTask(t.task_id) }, "Start"))));
+  if (!state.token) { show("login"); return; }
+  let me;
+  try { me = await api("/api/me"); } catch { return; }
+  state.mode = me.mode;
+  $("who").textContent = `— ${me.worker_id} (${me.mode})`;
+  if (me.active_session) { openSession(me.active_session); return; }
+  if (me.pending_correction) { showCorrectionChoice(me.pending_correction, null); return; }
+  $("mode-help").textContent = MODE_HELP[me.mode] || "";
+  $("task-list").replaceChildren(...me.tasks.map((t) => {
+    const status = t.done ? "Done" : me.mode === "onboarding" && t.attempts
+      ? `${t.attempts} attempt(s), last ${t.last_pass ? "passed" : "did not pass"}` : "";
+    return h("div", { class: "task-item" },
+      h("div", {}, h("span", { class: "tag" }, t.domain), " ", t.preview, "…",
+        status ? h("div", { class: "muted small-text" }, status) : ""),
+      t.done ? h("span", { class: "muted" }, "✓") : h("button", { onclick: () => startTask(t.task_id) }, t.attempts ? "Try again" : "Start"));
+  }));
+  if (!me.tasks.length) $("task-list").append(h("div", { class: "muted" }, "No tasks are assigned to you right now."));
   show("picker");
 }
 
 async function startTask(taskId) {
+  show("picker");
   $("task-list").prepend(h("div", { class: "muted" }, "Preparing a fresh environment… (this can take a few seconds)"));
   try {
-    const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ worker_id: state.worker, task_id: taskId }) });
-    state.session = s.session_id; state.tools = s.tools;
-    $("instruction").textContent = s.task.instruction;
-    $("policy").textContent = s.task.policy;
-    $("history").replaceChildren(); $("step-count").textContent = "";
-    $("final-response").value = ""; $("worker-note").value = "";
-    $("output-panel").hidden = true;
-    $("tool-panel").replaceChildren(h("div", { class: "muted" }, "Pick an action on the left to fill it in."));
-    renderToolList();
-    show("workspace");
+    openSession(await api("/api/sessions", { method: "POST", body: JSON.stringify({ task_id: taskId }) }));
   } catch (e) { alert("Could not start task: " + e.message); loadTasks(); }
+}
+
+function openSession(s) {
+  state.session = s.session_id; state.tools = s.tools;
+  $("instruction").textContent = s.task.instruction;
+  $("policy").textContent = s.task.policy;
+  $("history").replaceChildren(); $("step-count").textContent = "";
+  $("final-response").value = ""; $("worker-note").value = "";
+  $("output-panel").hidden = true;
+  $("tool-panel").replaceChildren(h("div", { class: "muted" }, s.attempt_kind === "correction"
+    ? "Follow-up fix: everything from your first attempt is still in place (greyed out in History). Make the changes needed, then submit."
+    : "Pick an action on the left to fill it in."));
+  s.history.forEach(addHistory);
+  renderToolList();
+  show("workspace");
 }
 
 function renderToolList() {
@@ -150,7 +179,7 @@ function showResult(r) {
 
 function addHistory(r) {
   const args = Object.entries(r.arguments).map(([k, v]) => `${humanize(k)}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join("; ");
-  const li = h("li", { class: r.error ? "err" : "" },
+  const li = h("li", { class: (r.error ? "err " : "") + (r.from_previous_attempt ? "prev" : "") },
     h("strong", {}, humanize(r.tool_name)), r.error ? " (error)" : "",
     h("div", { class: "muted small-text" }, args || "no inputs"));
   li.addEventListener("click", () => showResult(r));
@@ -163,21 +192,54 @@ async function finish(outcome) {
     alert("Please add a short note explaining what is unclear or broken."); return;
   }
   if (!confirm(outcome === "submit" ? "Submit this task as complete?" : "Report this task as unclear/broken?")) return;
+  const sid = state.session;
+  let r;
   try {
-    await api(`/api/sessions/${state.session}/finish`, { method: "POST", body: JSON.stringify({
+    r = await api(`/api/sessions/${sid}/finish`, { method: "POST", body: JSON.stringify({
       outcome, final_response: $("final-response").value, worker_note: $("worker-note").value }) });
-    state.session = null; show("done");
-  } catch (e) { alert("Could not finish: " + e.message); }
+  } catch (e) { alert("Could not finish: " + e.message); return; }
+  state.session = null;
+  if (r.can_correct) { showCorrectionChoice(sid, r); return; }
+  showDone(r);
 }
 
-$("login-btn").onclick = () => { const v = $("worker-id").value.trim(); if (!v) return; state.worker = v; localStorage.setItem("datasea_worker", v); loadTasks(); };
+const back = () => h("button", { onclick: loadTasks }, "Back to tasks");
+
+function showDone(r) {
+  const body = [];
+  if (state.mode === "onboarding" && r.status !== "flagged_unclear") {
+    $("done-title").textContent = r.passed ? "✓ All checks passed" : "✗ Not all checks passed";
+    if (r.checks_total != null) body.push(h("p", {}, `${r.checks_passed} of ${r.checks_total} checks passed.`));
+    body.push(h("p", { class: "muted" }, "This was practice. You can try again from a fresh start."));
+  } else if (r.status === "flagged_unclear") {
+    $("done-title").textContent = "Thanks — your report was recorded.";
+  } else {
+    $("done-title").textContent = r.passed ? "✓ Recorded — checks passed" : "Recorded — checks did not pass";
+  }
+  $("done-body").replaceChildren(...body);
+  $("done-actions").replaceChildren(back());
+  show("done");
+}
+
+function showCorrectionChoice(sid, r) {
+  $("done-title").textContent = "Recorded — checks did not pass";
+  $("done-body").replaceChildren(
+    r && r.checks_total != null ? h("p", {}, `${r.checks_passed} of ${r.checks_total} checks passed.`) : "",
+    h("p", {}, "Your submission has been saved exactly as you made it, and that won't change."),
+    h("p", {}, "If you want, you can make one follow-up fix. You'll keep working on the same data, including every change you already made. The fix is recorded separately. This step is optional."));
+  $("done-actions").replaceChildren(
+    h("button", { class: "primary", onclick: async () => {
+      try { openSession(await api(`/api/sessions/${sid}/correct`, { method: "POST" })); }
+      catch (e) { alert(e.message); loadTasks(); } } }, "Try to fix it"),
+    h("button", { onclick: async () => { await api(`/api/sessions/${sid}/skip_correction`, { method: "POST" }).catch(() => {}); loadTasks(); } }, "Skip"));
+  show("done");
+}
+
 $("tool-filter").oninput = renderToolList;
 $("submit-btn").onclick = () => finish("submit");
 $("unclear-btn").onclick = () => finish("unclear");
-$("next-btn").onclick = loadTasks;
 window.addEventListener("beforeunload", (e) => { if (state.session) { e.preventDefault(); e.returnValue = ""; } });
-if (state.worker) { $("worker-id").value = state.worker; }
-show("login");
+loadTasks();
 </script>
 </body>
 </html>

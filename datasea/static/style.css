@@ -49,6 +49,7 @@ pre.err { background: #fdecea; }
 .history { padding-left: 20px; }
 .history li { cursor: pointer; margin-bottom: 6px; }
 .history li.err strong { color: #b3261e; }
+.history li.prev { opacity: 0.55; }
 .task-item { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #eee; }
 .tag { background: #e6ecfa; color: #2456d6; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
 

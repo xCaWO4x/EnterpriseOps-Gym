@@ -19,7 +19,8 @@ from benchmark.models import LLMConfig
 from orchestrators.base import AgentOrchestrator
 
 from .env import TaskEnvironment
-from .tasks import get_task
+from .audit import load_split
+from .tasks import get_task, hf_row_to_config
 
 
 class ScriptedOrchestrator(AgentOrchestrator):
@@ -43,9 +44,16 @@ async def main():
     p = argparse.ArgumentParser()
     p.add_argument("--task_id", required=True)
     p.add_argument("--script", required=True)
+    p.add_argument("--domain", default="email", help="used when the task is not in the pilot catalog")
+    p.add_argument("--revision", default="c8e538eae8a6205294f0a86675fefdc1fac408f6")
     args = p.parse_args()
 
     entry = get_task(args.task_id)
+    if entry is None:
+        rows = [r for r in load_split(args.domain, args.revision, "oracle") if r["task_id"] == args.task_id]
+        if not rows:
+            raise SystemExit(f"{args.task_id} not found in catalog or {args.domain} split")
+        entry = {"config": hf_row_to_config(rows[0])}
     ScriptedOrchestrator.script = json.load(open(args.script))
 
     # Build the config exactly as datasea.env does (upstream evaluate.load_config).
