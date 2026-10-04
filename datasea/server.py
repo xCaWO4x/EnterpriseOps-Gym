@@ -135,6 +135,9 @@ def admin_page():
 
 def _task_status(worker: Dict[str, Any], task_id: str) -> Dict[str, Any]:
     sessions = store.sessions_for(worker["worker_id"], task_id, worker["mode"])
+    if worker["mode"] == "production":
+        # crashed/abandoned sessions (status error) never consume the single first attempt
+        sessions = [s for s in sessions if s["status"] != ERROR]
     firsts = [s for s in sessions if s["attempt_kind"] == "first"]
     return {"attempts": len(sessions), "done": bool(firsts) and worker["mode"] == "production",
             "last_pass": None if worker["mode"] == "production" or not sessions else sessions[-1]["verifier_pass"]}
@@ -160,6 +163,8 @@ async def me(worker=Depends(require_worker)):
         if e:
             tasks.append({"task_id": t, "domain": e["domain"], "preview": e["config"]["user_prompt"][:160],
                           **_task_status(worker, t)})
+            if worker["mode"] == "production" and not tasks[-1]["done"]:
+                break  # production tasks unlock one at a time, in assigned order
     active = _active_session(worker)
     pending = next((sid for sid in pending_correction
                     if store.get_session(sid)["worker_id"] == worker["worker_id"]), None)

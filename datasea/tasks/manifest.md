@@ -9,9 +9,15 @@ Difficulty is a heuristic: mutating tools + verifiers/2 + prompt chars/300 (easy
 | pool | domain | task_id | difficulty (score) | tools (mutating) | cross-app | verifiers | first-time worker |
 |---|---|---|---|---|---|---|---|
 | onboarding | email | `task_20260107_191539_515_911d75d7_3ea7750e` | easy (4.12) | 5 (2) | no | 2 | yes |
+| onboarding | email | `task_20260106_085129_923_e5bf1251_dd76af07` | easy (4.2) | 5 (2) | no | 2 | yes |
+| onboarding | email | `task_20260107_101510_200_e7cfb93b_142300ed` | hard (9.09) | 5 (2) | no | 9 | no |
 | onboarding | calendar | `task_20251203_142725_377_6f5b66fc_c990483e` | easy (4.01) | 4 (1) | no | 3 | yes |
+| onboarding | calendar | `task_20260121_214553_691_cbcf38f8_abce7315` | easy (4.19) | 4 (1) | no | 3 | yes |
+| onboarding | calendar | `task_20251203_080219_432_6f5b66fc_03eb353c` | medium (5.51) | 5 (2) | no | 5 | yes |
 | onboarding | drive | `task_20251210_200511_673_4a23b9c9_dcd88f59` | easy (3.98) | 5 (1) | no | 4 | yes |
+| onboarding | drive | `task_20251204_092557_093_ae7b45e2_24132aa0` | easy (5.07) | 4 (2) | no | 4 | yes |
 | onboarding | teams | `task_20251121_134729_533_464ee3e0_2dcf2712` | easy (3.89) | 4 (2) | no | 2 | yes |
+| onboarding | teams | `task_20260108_162420_138_df0ecdeb_96950310` | easy (4.21) | 5 (2) | no | 2 | yes |
 | canary | email | `task_20260107_162939_118_e5bf1251_437648af` | easy (4.46) | 5 (2) | no | 2 | yes |
 | canary | email | `task_20251204_100249_196_701c5774_af32832e` | easy (4.83) | 4 (2) | no | 3 | yes |
 | canary | email | `task_20260105_161440_926_701c5774_7dd66a6f` | medium (6.14) | 5 (3) | no | 3 | yes |

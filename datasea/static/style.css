@@ -30,8 +30,22 @@ label { display: block; font-weight: 600; margin-top: 8px; }
   #workspace { grid-template-columns: 1fr; }
   #left { position: static; max-height: none; }
 }
-.instruction { white-space: pre-wrap; font-size: 15px; background: #fffbe6; border-left: 3px solid #e3b400; padding: 8px; }
-.policy { white-space: pre-wrap; font-size: 12px; max-height: 300px; overflow: auto; }
+.instruction { font-size: 15px; background: #fffbe6; border-left: 3px solid #e3b400; padding: 8px; }
+.policy { font-size: 13px; line-height: 1.45; max-height: 420px; overflow: auto; padding: 4px 8px 8px; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p { margin: 0 0 9px; }
+.markdown h3, .markdown h4, .markdown h5, .markdown h6 {
+  line-height: 1.25;
+  margin: 15px 0 7px;
+}
+.markdown h3 { font-size: 16px; }
+.markdown h4 { font-size: 14px; }
+.markdown h5, .markdown h6 { font-size: 13px; }
+.markdown ul, .markdown ol { margin: 5px 0 11px; padding-left: 23px; }
+.markdown li { margin: 0 0 6px; }
+.markdown hr { border: 0; border-top: 1px solid #d8dde8; margin: 14px 0; }
+.markdown code { background: #eef1f6; border-radius: 3px; padding: 1px 4px; }
 .tool-list { list-style: none; padding: 0; margin: 8px 0 0; }
 .tool-list li { padding: 6px 8px; border-radius: 5px; cursor: pointer; }
 .tool-list li:hover { background: #eef2fb; }

@@ -93,6 +93,63 @@ function pretty(text) {
   try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
 }
 
+function renderInline(text) {
+  const frag = document.createDocumentFragment();
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    frag.append(document.createTextNode(text.slice(last, match.index)));
+    if (match[0].startsWith("**")) {
+      frag.append(h("strong", {}, match[0].slice(2, -2)));
+    } else {
+      frag.append(h("code", {}, match[0].slice(1, -1)));
+    }
+    last = match.index + match[0].length;
+  }
+  frag.append(document.createTextNode(text.slice(last)));
+  return frag;
+}
+
+function renderMarkdown(text) {
+  const root = h("div", { class: "markdown" });
+  const lines = String(text || "").replaceAll("\u00a0", " ").split(/\r?\n/);
+  let list = null;
+  let listType = null;
+  const closeList = () => { list = null; listType = null; };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) { closeList(); continue; }
+    if (/^---+$/.test(line)) { closeList(); root.append(h("hr")); continue; }
+
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = Math.min(heading[1].length + 2, 6);
+      root.append(h(`h${level}`, {}, renderInline(heading[2].replace(/\*\*$/g, ""))));
+      continue;
+    }
+
+    const bullet = line.match(/^[*-]\s+(.+)$/);
+    const numbered = line.match(/^\d+[.)]\s*(.+)$/);
+    const item = bullet || numbered;
+    if (item) {
+      const type = numbered ? "ol" : "ul";
+      if (!list || listType !== type) {
+        list = h(type);
+        listType = type;
+        root.append(list);
+      }
+      list.append(h("li", {}, renderInline(item[1])));
+      continue;
+    }
+
+    closeList();
+    root.append(h("p", {}, renderInline(line)));
+  }
+  return root;
+}
+
 const MODE_HELP = {
   onboarding: "Practice mode: after you submit you'll see whether the checks passed, and you can try again from a fresh start.",
   production: "Each task can be submitted once, and your first submission is recorded as is. If the checks fail, you may optionally make one follow-up fix.",
@@ -129,8 +186,8 @@ async function startTask(taskId) {
 
 function openSession(s) {
   state.session = s.session_id; state.tools = s.tools;
-  $("instruction").textContent = s.task.instruction;
-  $("policy").textContent = s.task.policy;
+  $("instruction").replaceChildren(renderMarkdown(s.task.instruction));
+  $("policy").replaceChildren(renderMarkdown(s.task.policy));
   $("history").replaceChildren(); $("step-count").textContent = "";
   $("final-response").value = ""; $("worker-note").value = "";
   $("output-panel").hidden = true;
